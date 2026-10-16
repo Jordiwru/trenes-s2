@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Trenes S2</title>
+<meta name="theme-color" content="#0b6b3a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#f4f6f5; --card:#ffffff; --ink:#14201a; --muted:#5d6b64; --line:#e2e7e4;
+  --brand:#0b6b3a; --brand-ink:#ffffff; --ok:#13804a; --warn:#b45309; --bad:#b91c1c; --chip:#eef2f0;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0e1411; --card:#161e1a; --ink:#e9efec; --muted:#9aa8a1; --line:#25302b;
+    --brand:#2fa36a; --brand-ink:#04140b; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --chip:#1f2a25; }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));-webkit-tap-highlight-color:transparent}
+.wrap{max-width:520px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px}
+.line{background:var(--brand);color:var(--brand-ink);border-radius:8px;padding:2px 8px;font-size:15px;letter-spacing:.5px}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+.refresh{width:44px;height:44px;border-radius:12px;background:var(--card);border:1px solid var(--line);display:grid;place-items:center}
+.refresh svg{width:22px;height:22px}
+.refresh.spin svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--chip);padding:5px;border-radius:14px;margin-bottom:14px}
+.tab{padding:10px 6px;border-radius:10px;font-weight:600;font-size:14.5px;color:var(--muted);line-height:1.2}
+.tab small{display:block;font-weight:500;font-size:12px;margin-top:2px}
+.tab[aria-selected="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.list{display:flex;flex-direction:column;gap:10px}
+.train{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:2px 12px;align-items:center}
+.train.first{border:2px solid var(--brand)}
+.dep{font-size:30px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.dep s{color:var(--muted);font-size:17px;font-weight:500;margin-left:6px}
+.in{font-size:22px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+.in.soon{color:var(--warn)}
+.meta{color:var(--muted);font-size:14px}
+.badge{justify-self:end;font-size:12.5px;font-weight:650;padding:3px 8px;border-radius:999px;background:var(--chip);color:var(--muted);white-space:nowrap}
+.badge.ok{color:var(--ok)} .badge.late{color:var(--warn)} .badge.bad{color:var(--bad)}
+.train.cancel .dep{text-decoration:line-through;color:var(--muted)}
+.status{margin-top:16px;color:var(--muted);font-size:13px;text-align:center}
+.error{background:var(--card);border:1px solid var(--bad);color:var(--bad);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+.empty{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;text-align:center;color:var(--muted)}
+.skel{height:84px;border-radius:16px;background:var(--card);border:1px solid var(--line);opacity:.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><span class="line">S2</span> Próximos trenes</div>
+    <button class="refresh" id="refresh" aria-label="Actualizar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </button>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-dir="ida">Can Feu → Tres Torres<small>Ir al trabajo</small></button>
+    <button class="tab" role="tab" data-dir="vuelta">Tres Torres → Can Feu<small>Volver a casa</small></button>
+  </div>
+
+  <div id="err"></div>
+  <div class="list" id="list"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+const API = 'https://dadesobertes.fgc.cat/api/explore/v2.1/catalog/datasets';
+const DIRS = {
+  ida:    { from: 'CF2', to: 'TT2' },   // andén 2 = sentido Barcelona
+  vuelta: { from: 'TT1', to: 'CF1' }    // andén 1 = sentido Sabadell
+};
+const SHOW = 6;
+const TZ = 'Europe/Madrid';
+
+let dir = new Date().toLocaleString('en-GB', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' }) < '14' ? 'ida' : 'vuelta';
+let schedule = null;      // { date, ida: [...], vuelta: [...] }
+let rt = null;            // { ts, trips: [...] }
+let lastOk = null;
+
+/* ---------- utilidades de hora (Europe/Madrid) ---------- */
+const fmtParts = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23' });
+function madridDate(ms){ const p = Object.fromEntries(fmtParts.formatToParts(new Date(ms)).map(x=>[x.type,x.value])); return `${p.year}-${p.month}-${p.day}`; }
+function madridMidnight(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const guess = Date.UTC(y, m-1, d, 12);
+  const p = Object.fromEntries(fmtParts.formatToParts(new Date(guess)).map(x=>[x.type,x.value]));
+  const wall = Date.UTC(+p.year, +p.month-1, +p.day, +p.hour, +p.minute, +p.second);
+  return Date.UTC(y, m-1, d) - (wall - guess);
+}
+const toSec = t => { const [h,m,s] = t.split(':').map(Number); return h*3600 + m*60 + (s||0); };
+const hhmm = ms => new Date(ms).toLocaleTimeString('es-ES', { timeZone: TZ, hour:'2-digit', minute:'2-digit' });
+
+/* ---------- horario del día ---------- */
+async function loadSchedule(){
+  const today = madridDate(Date.now());
+  if (schedule && schedule.date === today) return;
+  const where = 'route_short_name="S2" and (stop_id="CF1" or stop_id="CF2" or stop_id="TT1" or stop_id="TT2")';
+  const url = `${API}/viajes-de-hoy/exports/json?select=date,stop_id,arrival_time,departure_time,shape_id&where=${encodeURIComponent(where)}`;
+  const rows = await fetch(url).then(r => { if(!r.ok) throw new Error('horario ' + r.status); return r.json(); });
+  if (!rows.length) throw new Error('FGC no ha devuelto horario para hoy');
+  const date = rows[0].date;
+  const base = madridMidnight(date);
+  const out = { date: madridDate(Date.now()) };
+  for (const [key, d] of Object.entries(DIRS)){
+    const byShape = {};
+    for (const r of rows){
+      if (r.stop_id !== d.from && r.stop_id !== d.to) continue;
+      const s = byShape[r.shape_id] ||= { dep: [], arr: [] };
+      if (r.stop_id === d.from) s.dep.push(base + toSec(r.departure_time)*1000);
+      else s.arr.push(base + toSec(r.arrival_time)*1000);
+    }
+    const trips = [];
+    for (const s of Object.values(byShape)){
+      s.dep.sort((a,b)=>a-b); s.arr.sort((a,b)=>a-b);
+      const paired = s.dep.length === s.arr.length;
+      s.dep.forEach((dep, i) => {
+        let arr = paired ? s.arr[i] : null;
+        if (arr !== null && (arr - dep < 15*60e3 || arr - dep > 70*60e3)) arr = null;
+        trips.push({ dep, arr });
+      });
+    }
+    // Si alguna llegada no se pudo emparejar, se estima con el tiempo de viaje típico
+    const travel = trips.filter(t=>t.arr).map(t=>t.arr - t.dep).sort((a,b)=>a-b);
+    const typical = travel.length ? travel[Math.floor(travel.length/2)] : 36*60e3;
+    trips.forEach(t => { if (!t.arr){ t.arr = t.dep + typical; t.arrEst = true; } });
+    out[key] = trips.sort((a,b)=>a.dep-b.dep);
+  }
+  schedule = out;
+}
+
+/* ---------- tiempo real (GTFS-Realtime, protobuf) ---------- */
+function pb(b){
+  let p = 0; const out = [];
+  const vint = () => { let r = 0, s = 0, x; do { x = b[p++]; r += (x & 127) * 2 ** s; s += 7; } while (x & 128); return r; };
+  while (p < b.length){
+    const k = vint(), f = Math.floor(k/8), t = k & 7;
+    if (t === 0) out.push([f, vint()]);
+    else if (t === 2){ const l = vint(); out.push([f, b.subarray(p, p+l)]); p += l; }
+    else if (t === 5){ p += 4; } else if (t === 1){ p += 8; }
+    else throw new Error('protobuf');
+  }
+  return out;
+}
+const td = new TextDecoder();
+async function loadRealtime(){
+  const meta = await fetch(`${API}/trip-updates-gtfs_realtime/records?limit=1`).then(r=>r.json());
+  const fileUrl = meta.results?.[0]?.file?.url;
+  if (!fileUrl) throw new Error('sin fichero de tiempo real');
+  const buf = new Uint8Array(await fetch(fileUrl).then(r => { if(!r.ok) throw new Error('tiempo real ' + r.status); return r.arrayBuffer(); }));
+  const msg = pb(buf);
+  const header = pb(msg.find(m => m[0] === 1)[1]);
+  const ts = (header.find(h => h[0] === 3)?.[1] || 0) * 1000;
+  const trips = [];
+  for (const [f, ent] of msg){
+    if (f !== 2) continue;
+    const tuField = pb(ent).find(x => x[0] === 3);
+    if (!tuField) continue;
+    const tu = pb(tuField[1]);
+    const desc = pb(tu.find(x => x[0] === 1)?.[1] || new Uint8Array());
+    const cancelled = desc.some(([ff, v]) => ff === 4 && v === 3);
+    const stops = {};
+    for (const [ff, v] of tu){
+      if (ff !== 2) continue;
+      const o = {}; let id = null;
+      for (const [g, w] of pb(v)){
+        if (g === 4) id = td.decode(w);
+        else if (g === 5) o.skip = w === 1;
+        else if (g === 2 || g === 3){ const t = pb(w).find(e => e[0] === 2); if (t) o[g === 2 ? 'arr' : 'dep'] = t[1] * 1000; }
+      }
+      if (id) stops[id] = o;
+    }
+    trips.push({ cancelled, stops });
+  }
+  rt = { ts, trips };
+}
+
+/* ---------- combinar horario + tiempo real ---------- */
+function build(key){
+  const d = DIRS[key];
+  const now = Date.now();
+  const sched = (schedule?.[key] || []).map(t => ({ ...t }));
+  const live = [];
+  for (const t of rt?.trips || []){
+    // Hay que exigir las dos estaciones: el S1 también para en Tres Torres pero no en Can Feu
+    const a = t.stops[d.from], b = t.stops[d.to]; if (!a || !b) continue;
+    const dep = a.dep || a.arr; if (!dep) continue;
+    live.push({ dep, arr: b ? (b.arr || b.dep) : null, cancelled: t.cancelled || !!a.skip });
+  }
+  live.sort((a,b)=>a.dep-b.dep);
+  // Empareja cada tren en tiempo real con su salida programada (la más tardía que no sea posterior a la predicción)
+  const used = new Set(); const extra = [];
+  for (const l of live){
+    let best = -1;
+    for (let i = 0; i < sched.length; i++){
+      if (used.has(i)) continue;
+      if (sched[i].dep <= l.dep + 90e3 && l.dep - sched[i].dep < 25*60e3) best = i;
+      if (sched[i].dep > l.dep + 90e3) break;
+    }
+    if (best >= 0){
+      used.add(best);
+      const s = sched[best];
+      s.live = true; s.planned = s.dep; s.dep = l.dep; s.cancelled = l.cancelled;
+      if (l.arr){ s.arr = l.arr; s.arrEst = false; }
+    } else extra.push({ ...l, live: true, planned: null, arr: l.arr || null });
+  }
+  return sched.concat(extra)
+    .filter(t => t.dep >= now - 30e3)
+    .sort((a,b)=>a.dep-b.dep)
+    .slice(0, SHOW);
+}
+
+/* ---------- pintar ---------- */
+function render(){
+  document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', t.dataset.dir === dir));
+  const list = document.getElementById('list');
+  if (!schedule && !rt){ return; }
+  const trains = build(dir);
+  const now = Date.now();
+  if (!trains.length){ list.innerHTML = '<div class="empty">No quedan más trenes S2 hoy en este sentido.</div>'; return; }
+  list.innerHTML = trains.map((t, i) => {
+    const mins = Math.max(0, Math.round((t.dep - now)/60e3));
+    const inTxt = t.cancelled ? '' : mins === 0 ? 'ahora' : mins < 60 ? `${mins} min` : `${Math.floor(mins/60)} h ${mins%60}`;
+    let badge = '<span class="badge">Horario</span>';
+    // Retraso calculado sobre los minutos que se muestran, para que cuadre con las horas visibles
+    const delay = t.planned ? Math.floor(t.dep/60e3) - Math.floor(t.planned/60e3) : 0;
+    if (t.cancelled) badge = '<span class="badge bad">Cancelado</span>';
+    else if (t.live && delay >= 2) badge = `<span class="badge late">+${delay} min</span>`;
+    else if (t.live) badge = '<span class="badge ok">● En hora</span>';
+    const planned = t.live && t.planned && delay >= 2 ? `<s>${hhmm(t.planned)}</s>` : '';
+    const arr = t.arr ? `Llega ${t.arrEst ? '≈' : ''}${hhmm(t.arr)} · ${Math.round((t.arr - t.dep)/60e3)} min de viaje` : '';
+    return `<div class="train${i===0?' first':''}${t.cancelled?' cancel':''}">
+      <div class="dep">${hhmm(t.dep)}${planned}</div>
+      <div class="in${mins<=3?' soon':''}">${inTxt}</div>
+      <div class="meta">${arr}</div>
+      ${badge}
+    </div>`;
+  }).join('');
+  const st = document.getElementById('status');
+  st.textContent = lastOk ? `Actualizado ${hhmm(lastOk)}${rt?.ts ? ' · tiempo real FGC de las ' + hhmm(rt.ts) : ''} · Datos: FGC Dades Obertes` : '';
+}
+
+async function refresh(){
+  const btn = document.getElementById('refresh'); btn.classList.add('spin');
+  const err = document.getElementById('err'); err.innerHTML = '';
+  const errors = [];
+  await Promise.all([
+    loadSchedule().catch(e => errors.push('Horario: ' + e.message)),
+    loadRealtime().catch(e => { rt = null; errors.push('Tiempo real: ' + e.message); })
+  ]);
+  if (schedule || rt) lastOk = Date.now();
+  if (errors.length) err.innerHTML = `<div class="error">No se pudo cargar todo (${errors.join(' · ')}). ${schedule ? 'Muestro el horario programado.' : 'Revisa la conexión y pulsa actualizar.'}</div>`;
+  btn.classList.remove('spin');
+  render();
+}
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => { dir = t.dataset.dir; render(); }));
+document.getElementById('refresh').addEventListener('click', refresh);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+setInterval(() => { if (!document.hidden) refresh(); }, 30e3);
+setInterval(render, 10e3);
+render(); refresh();
+</script>
+</body>
+</html>
